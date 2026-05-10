@@ -1,96 +1,58 @@
 import { NextResponse } from "next/server";
 
-const BOT_TOKEN = process.env.BOT_TOKEN!;
-const GROQ_API_KEY = process.env.GROQ_API_KEY!;
+const BOT_TOKEN = process.env.BOT_TOKEN;
+const GROQ_API_KEY = process.env.GROQ_API_KEY;
 
 const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`;
 
 export async function POST(req: Request) {
   try {
-    console.log("=== TELEGRAM WEBHOOK HIT ===");
-
     const body = await req.json();
 
-    const message = body?.message;
+    const message = body.message;
 
     if (!message) {
-      console.log("No message received");
       return NextResponse.json({ ok: true });
     }
 
-    const chatId = message.chat?.id;
-    const text = message.text?.trim();
+    const chatId = message.chat.id;
+    const userText = message.text;
 
-    if (!chatId) {
-      console.log("No chat ID");
-      return NextResponse.json({ ok: true });
-    }
-
-    console.log("USER MESSAGE:", text);
+    console.log("MESSAGE:", userText);
 
     // =========================
-    // START COMMAND
+    // START
     // =========================
-    if (text === "/start") {
+
+    if (userText === "/start") {
       await sendMessage(
         chatId,
-        `🤖 Advanced AI Bot is online.
-
-Features:
-• Smart AI replies
-• Real-time India time
-• Better stability
-• Faster responses
-
-Ask me anything.`
+        "🤖 Advanced AI Bot Online.\n\nAsk me anything."
       );
 
       return NextResponse.json({ ok: true });
     }
 
     // =========================
-    // HELP COMMAND
+    // EMPTY TEXT
     // =========================
-    if (text === "/help") {
-      await sendMessage(
-        chatId,
-        `📌 Commands:
 
-/start - Start bot
-/help - Show commands
-
-Examples:
-• what is the time
-• explain java
-• who is elon musk
-• write python code`
-      );
-
+    if (!userText) {
+      await sendMessage(chatId, "⚠️ Send text messages only.");
       return NextResponse.json({ ok: true });
     }
 
-    // =========================
-    // NON TEXT HANDLING
-    // =========================
-    if (!text) {
-      await sendMessage(
-        chatId,
-        "⚠️ Currently I support only text messages."
-      );
-
-      return NextResponse.json({ ok: true });
-    }
-
-    const lowerText = text.toLowerCase();
+    const lower = userText.toLowerCase();
 
     // =========================
     // REAL TIME
     // =========================
+
     if (
-      lowerText.includes("time") ||
-      lowerText.includes("date")
+      lower.includes("time") ||
+      lower.includes("date")
     ) {
-      const currentTime = new Date().toLocaleString(
+      const indiaTime = new Date().toLocaleString(
         "en-IN",
         {
           timeZone: "Asia/Kolkata",
@@ -99,22 +61,24 @@ Examples:
 
       await sendMessage(
         chatId,
-        `🕒 Current India Time:\n${currentTime}`
+        `🕒 Current India Time:\n${indiaTime}`
       );
 
       return NextResponse.json({ ok: true });
     }
 
     // =========================
-    // TYPING INDICATOR
+    // TYPING
     // =========================
+
     await sendTyping(chatId);
 
     // =========================
-    // GROQ AI REQUEST
+    // AI REQUEST
     // =========================
+
     try {
-      const aiResponse = await fetch(
+      const response = await fetch(
         "https://api.groq.com/openai/v1/chat/completions",
         {
           method: "POST",
@@ -123,74 +87,83 @@ Examples:
             "Content-Type": "application/json",
           },
           body: JSON.stringify({
-            model: "llama-3.3-70b-versatile",
-            temperature: 0.7,
-            max_tokens: 700,
-            top_p: 1,
-            stream: false,
+            model: "llama3-70b-8192",
+
             messages: [
               {
                 role: "system",
                 content: `
-You are Vishnu's advanced AI Telegram assistant.
+You are Vishnu's smart Telegram AI assistant.
 
 Rules:
-- Reply naturally and intelligently
-- Be concise unless detailed answer needed
-- Help with coding, tech, education, productivity, and general knowledge
-- Give direct answers
-- Avoid useless disclaimers
-- Format code properly
-`,
+- Talk naturally
+- Give useful answers
+- Help with coding
+- Help with education
+- Be concise
+- Avoid robotic replies
+                `,
               },
               {
                 role: "user",
-                content: text,
+                content: userText,
               },
             ],
+
+            temperature: 0.7,
+            max_tokens: 500,
           }),
         }
       );
 
       // =========================
-      // HANDLE BAD RESPONSE
+      // RAW RESPONSE
       // =========================
-      if (!aiResponse.ok) {
-        const errorText = await aiResponse.text();
 
-        console.log("GROQ API ERROR:");
-        console.log(errorText);
+      const rawText = await response.text();
 
+      console.log("RAW GROQ:");
+      console.log(rawText);
+
+      // =========================
+      // RESPONSE FAIL
+      // =========================
+
+      if (!response.ok) {
         await sendMessage(
           chatId,
-          "⚠️ AI service temporarily unavailable."
+          "⚠️ AI server error."
         );
 
         return NextResponse.json({ ok: true });
       }
 
-      const data = await aiResponse.json();
+      // =========================
+      // PARSE JSON
+      // =========================
 
-      console.log("GROQ SUCCESS");
+      const data = JSON.parse(rawText);
 
-      let reply =
+      let aiReply =
         data?.choices?.[0]?.message?.content;
 
-      if (!reply) {
-        reply = "⚠️ AI could not generate a response.";
+      if (!aiReply) {
+        aiReply =
+          "⚠️ AI could not generate a response.";
       }
 
-      // Telegram max message safety
-      if (reply.length > 4000) {
-        reply = reply.substring(0, 4000);
+      // Telegram limit safety
+
+      if (aiReply.length > 4000) {
+        aiReply = aiReply.substring(0, 4000);
       }
 
-      await sendMessage(chatId, reply);
+      await sendMessage(chatId, aiReply);
 
       return NextResponse.json({ ok: true });
-    } catch (aiError: any) {
-      console.log("AI PROCESSING ERROR:");
-      console.log(aiError);
+    } catch (error) {
+      console.log("AI ERROR:");
+      console.log(error);
 
       await sendMessage(
         chatId,
@@ -199,13 +172,12 @@ Rules:
 
       return NextResponse.json({ ok: true });
     }
-  } catch (error: any) {
+  } catch (error) {
     console.log("SERVER ERROR:");
     console.log(error);
 
     return NextResponse.json({
       ok: false,
-      error: error?.message || "Unknown error",
     });
   }
 }
@@ -213,39 +185,31 @@ Rules:
 // =========================
 // SEND MESSAGE
 // =========================
+
 async function sendMessage(
   chatId: number,
   text: string
 ) {
   try {
-    const response = await fetch(
-      `${TELEGRAM_API}/sendMessage`,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          chat_id: chatId,
-          text,
-        }),
-      }
-    );
-
-    const data = await response.json();
-
-    console.log("TELEGRAM MESSAGE SENT");
-
-    return data;
+    await fetch(`${TELEGRAM_API}/sendMessage`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        chat_id: chatId,
+        text,
+      }),
+    });
   } catch (error) {
-    console.log("SEND MESSAGE ERROR:");
-    console.log(error);
+    console.log("SEND MESSAGE ERROR");
   }
 }
 
 // =========================
 // TYPING STATUS
 // =========================
+
 async function sendTyping(chatId: number) {
   try {
     await fetch(
@@ -262,6 +226,6 @@ async function sendTyping(chatId: number) {
       }
     );
   } catch (error) {
-    console.log("Typing indicator failed");
+    console.log("Typing failed");
   }
 }
