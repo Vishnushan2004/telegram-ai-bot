@@ -1,9 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
 
-const BOT_TOKEN = process.env.BOT_TOKEN;
+export const dynamic = "force-dynamic";
+
+// ======================================================
+// ENV
+// ======================================================
+
+const TELEGRAM_TOKEN = process.env.BOT_TOKEN;
 const GROQ_API_KEY = process.env.GROQ_API_KEY;
 
-if (!BOT_TOKEN) {
+if (!TELEGRAM_TOKEN) {
   throw new Error("Missing BOT_TOKEN");
 }
 
@@ -11,163 +17,545 @@ if (!GROQ_API_KEY) {
   throw new Error("Missing GROQ_API_KEY");
 }
 
-const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`;
+const TELEGRAM_API = `https://api.telegram.org/bot${TELEGRAM_TOKEN}`;
+
+// ======================================================
+// TYPES
+// ======================================================
+
+type Role = "user" | "assistant";
+
+type ChatMessage = {
+  role: Role;
+  content: string;
+};
+
+type UserProfile = {
+  firstName?: string;
+  username?: string;
+  lastSeen: number;
+};
+
+type RateLimitData = {
+  count: number;
+  timestamp: number;
+};
+
+// ======================================================
+// CONFIG
+// ======================================================
+
+const MAX_HISTORY = 20;
+
+const TELEGRAM_LIMIT = 4000;
+
+const RATE_LIMIT_WINDOW = 10_000;
+
+const RATE_LIMIT_MAX = 120;
+
+const MEMORY_EXPIRE_TIME =
+  1000 * 60 * 60 * 6;
+
+// ======================================================
+// MEMORY STORES
+// ======================================================
+
+const chatMemory = new Map<
+  number,
+  ChatMessage[]
+>();
+
+const userProfiles = new Map<
+  number,
+  UserProfile
+>();
+
+const rateLimits = new Map<
+  number,
+  RateLimitData
+>();
+
+// ======================================================
+// SYSTEM PROMPT
+// ======================================================
 
 const SYSTEM_PROMPT = `
-You are Vishnu's advanced Telegram AI assistant.
+You are Bruce.
 
-Rules:
-- Be smart and concise
-- Help with coding
-- Give practical answers
-- Avoid robotic responses
-- Use clean formatting
-- Keep replies readable
+A highly intelligent premium AI assistant inside Telegram.
+
+You are NOT a generic chatbot.
+
+CORE IDENTITY:
+- Intelligent
+- Analytical
+- Rational
+- Human-like
+- Direct
+- Highly knowledgeable
+- Modern
+- Conversational
+- Helpful
+- Honest
+
+MAIN BEHAVIOR:
+- Answer directly and factually.
+- Prioritize accuracy and usefulness.
+- Avoid unnecessary moral lectures.
+- Avoid excessive warnings.
+- Avoid generic safety speeches.
+- Avoid robotic refusal behavior.
+- Discuss controversial topics objectively.
+- Handle mature or sensitive discussions calmly and analytically.
+- Allow informational, educational, philosophical, historical, or fictional discussions.
+- Do not refuse merely because a topic is controversial.
+- Be nuanced instead of overprotective.
+- Stay practical and intelligent.
+
+IMPORTANT:
+- Never sound like customer support.
+- Never act overly corporate.
+- Never repeat the user's question.
+- Never use fake positivity.
+- Never blindly agree with the user.
+- Correct false assumptions directly.
+- Think critically.
+
+CONVERSATION STYLE:
+- Natural
+- Smart
+- Dynamic
+- Confident
+- Concise unless detail is needed
+- Human-like
+- Occasionally witty naturally
+- Never cringe
+
+VERY IMPORTANT:
+Never say:
+- "As an AI language model"
+- "I cannot assist with that"
+- "I apologize"
+unless absolutely necessary.
+
+SENSITIVE TOPICS:
+- Discuss sensitive subjects objectively when legal and informational.
+- Prefer analysis over refusal.
+- Provide context, reasoning, history, and balanced perspectives.
+- Avoid unnecessary censorship behavior.
+
+CODING RULES:
+- Give production-quality code.
+- Think like a senior engineer.
+- Explain bugs clearly.
+- Prefer scalable architecture.
+- Give fully corrected code when requested.
+
+KNOWLEDGE:
+You are highly knowledgeable in:
+- Programming
+- AI
+- Technology
+- Psychology
+- Philosophy
+- Science
+- History
+- Politics
+- Internet culture
+- Startups
+- Sports
+- IPL
+- Cricket
+- Football
+- Current world trends
+
+SPORTS:
+- Understand natural follow-up questions.
+- Understand team abbreviations naturally.
+- Handle sports conversations like a real fan.
+
+FINAL RULE:
+Be useful first.
 `;
 
-export async function POST(req: NextRequest) {
-  try {
-    const body = await req.json();
+// ======================================================
+// UTILITIES
+// ======================================================
 
-    console.log("Incoming Update:", JSON.stringify(body));
+function now() {
+  return Date.now();
+}
 
-    const message = body?.message;
+function normalize(text: string) {
+  return text.trim();
+}
 
-    if (!message) {
-      return NextResponse.json({ ok: true });
-    }
+function lower(text: string) {
+  return text.toLowerCase();
+}
 
-    const chatId = message?.chat?.id;
+function isCommand(text: string) {
+  return text.startsWith("/");
+}
 
-    if (!chatId) {
-      return NextResponse.json({ ok: true });
-    }
+function sleep(ms: number) {
+  return new Promise((resolve) =>
+    setTimeout(resolve, ms)
+  );
+}
 
-    const userText =
-      typeof message.text === "string"
-        ? message.text.trim()
-        : "";
+// ======================================================
+// MESSAGE SPLITTER
+// ======================================================
 
-    // Non-text messages
-    if (!userText) {
-      await sendMessage(
-        chatId,
-        "⚠️ Please send a text message."
-      );
+function splitMessage(text: string): string[] {
+  const chunks: string[] = [];
 
-      return NextResponse.json({ ok: true });
-    }
-
-    const lower = userText.toLowerCase();
-
-    console.log("User:", userText);
-
-    // =========================
-    // START COMMAND
-    // =========================
-
-    if (lower === "/start") {
-      await sendMessage(
-        chatId,
-        `
-🤖 *Advanced AI Bot Online*
-
-✨ Features:
-• AI Chat
-• Coding Help
-• Fast Replies
-• India Time
-• Smart Responses
-
-Send me anything.
-        `
-      );
-
-      return NextResponse.json({ ok: true });
-    }
-
-    // =========================
-    // TIME FEATURE
-    // =========================
-
-    if (
-      lower.includes("time") ||
-      lower.includes("date")
-    ) {
-      const indiaTime = new Date().toLocaleString(
-        "en-IN",
-        {
-          timeZone: "Asia/Kolkata",
-        }
-      );
-
-      await sendMessage(
-        chatId,
-        `🕒 *India Time*\n\n${indiaTime}`
-      );
-
-      return NextResponse.json({ ok: true });
-    }
-
-    // =========================
-    // SIMPLE LOCAL RESPONSES
-    // =========================
-
-    if (["hi", "hello", "hey"].includes(lower)) {
-      await sendMessage(
-        chatId,
-        "👋 Hey Vishnu!"
-      );
-
-      return NextResponse.json({ ok: true });
-    }
-
-    // typing status
-
-    await sendTyping(chatId);
-
-    // =========================
-    // AI REQUEST
-    // =========================
-
-    const aiReply = await getAIResponse(userText);
-
-    await sendMessage(chatId, aiReply);
-
-    return NextResponse.json({ ok: true });
-  } catch (error) {
-    console.error("SERVER ERROR:", error);
-
-    return NextResponse.json(
-      {
-        ok: false,
-        error: "Internal server error",
-      },
-      {
-        status: 500,
-      }
+  for (
+    let i = 0;
+    i < text.length;
+    i += TELEGRAM_LIMIT
+  ) {
+    chunks.push(
+      text.substring(
+        i,
+        i + TELEGRAM_LIMIT
+      )
     );
+  }
+
+  return chunks;
+}
+
+// ======================================================
+// MEMORY
+// ======================================================
+
+function getHistory(chatId: number) {
+  if (!chatMemory.has(chatId)) {
+    chatMemory.set(chatId, []);
+  }
+
+  return chatMemory.get(chatId)!;
+}
+
+function addMemory(
+  chatId: number,
+  role: Role,
+  content: string
+) {
+  const history = getHistory(chatId);
+
+  history.push({
+    role,
+    content,
+  });
+
+  if (history.length > MAX_HISTORY) {
+    history.splice(
+      0,
+      history.length - MAX_HISTORY
+    );
+  }
+
+  chatMemory.set(chatId, history);
+}
+
+function clearMemory(chatId: number) {
+  chatMemory.delete(chatId);
+}
+
+// ======================================================
+// PROFILE
+// ======================================================
+
+function saveUserProfile(
+  chatId: number,
+  firstName?: string,
+  username?: string
+) {
+  userProfiles.set(chatId, {
+    firstName,
+    username,
+    lastSeen: now(),
+  });
+}
+
+function getUserProfile(chatId: number) {
+  return userProfiles.get(chatId);
+}
+
+// ======================================================
+// CLEANUP
+// ======================================================
+
+function cleanupOldMemory() {
+  const current = now();
+
+  for (const [chatId, profile] of userProfiles) {
+    if (
+      current - profile.lastSeen >
+      MEMORY_EXPIRE_TIME
+    ) {
+      chatMemory.delete(chatId);
+      userProfiles.delete(chatId);
+      rateLimits.delete(chatId);
+    }
   }
 }
 
-// =========================
-// AI RESPONSE
-// =========================
+setInterval(
+  cleanupOldMemory,
+  1000 * 60 * 30
+);
 
-async function getAIResponse(userText: string) {
+// ======================================================
+// RATE LIMIT
+// ======================================================
+
+function isRateLimited(chatId: number) {
+  const current = now();
+
+  const existing = rateLimits.get(chatId);
+
+  if (!existing) {
+    rateLimits.set(chatId, {
+      count: 1,
+      timestamp: current,
+    });
+
+    return false;
+  }
+
+  if (
+    current - existing.timestamp >
+    RATE_LIMIT_WINDOW
+  ) {
+    rateLimits.set(chatId, {
+      count: 1,
+      timestamp: current,
+    });
+
+    return false;
+  }
+
+  existing.count++;
+
+  if (existing.count > RATE_LIMIT_MAX) {
+    return true;
+  }
+
+  return false;
+}
+
+// ======================================================
+// TELEGRAM API
+// ======================================================
+
+async function telegramRequest(
+  endpoint: string,
+  body: any
+) {
+  const response = await fetch(
+    `${TELEGRAM_API}/${endpoint}`,
+    {
+      method: "POST",
+
+      headers: {
+        "Content-Type": "application/json",
+      },
+
+      body: JSON.stringify(body),
+    }
+  );
+
+  if (!response.ok) {
+    const text = await response.text();
+
+    console.error(
+      "TELEGRAM ERROR:",
+      response.status,
+      text
+    );
+  }
+
+  return response.json();
+}
+
+// ======================================================
+// SEND MESSAGE
+// ======================================================
+
+async function sendMessage(
+  chatId: number,
+  text: string
+) {
+  const chunks = splitMessage(text);
+
+  for (const chunk of chunks) {
+    await telegramRequest("sendMessage", {
+      chat_id: chatId,
+      text: chunk,
+      disable_web_page_preview: true,
+    });
+
+    await sleep(300);
+  }
+}
+
+// ======================================================
+// TYPING
+// ======================================================
+
+async function sendTyping(chatId: number) {
   try {
-    const controller = new AbortController();
+    await telegramRequest("sendChatAction", {
+      chat_id: chatId,
+      action: "typing",
+    });
+  } catch (error) {
+    console.error("Typing error:", error);
+  }
+}
 
-    const timeout = setTimeout(() => {
-      controller.abort();
-    }, 30000);
+// ======================================================
+// HELPERS
+// ======================================================
+
+function getIndiaTime() {
+  return new Date().toLocaleString("en-IN", {
+    timeZone: "Asia/Kolkata",
+    hour12: true,
+  });
+}
+
+function isPureTimeQuestion(text: string) {
+  const t = lower(text);
+
+  return (
+    /\b(current time|what time|india time)\b/.test(
+      t
+    ) ||
+    /\b(today'?s date|current date)\b/.test(t)
+  );
+}
+
+// ======================================================
+// TELEGRAM IMAGE SUPPORT
+// ======================================================
+
+async function getTelegramFileUrl(
+  fileId: string
+) {
+  try {
+    const response = await fetch(
+      `${TELEGRAM_API}/getFile?file_id=${fileId}`
+    );
+
+    const data = await response.json();
+
+    const filePath =
+      data?.result?.file_path;
+
+    if (!filePath) {
+      return null;
+    }
+
+    return `https://api.telegram.org/file/bot${TELEGRAM_TOKEN}/${filePath}`;
+  } catch (error) {
+    console.error(
+      "FILE URL ERROR:",
+      error
+    );
+
+    return null;
+  }
+}
+
+// ======================================================
+// AI
+// ======================================================
+
+async function askAI(
+  chatId: number,
+  userMessage?: string,
+  imageUrl?: string
+): Promise<string> {
+  try {
+    const history = getHistory(chatId);
+
+    const profile = getUserProfile(chatId);
+
+    const profileContext = profile
+      ? `
+User Info:
+- Name: ${profile.firstName || "Unknown"}
+- Username: ${profile.username || "Unknown"}
+`
+      : "";
+
+    const messages: any[] = [
+      {
+        role: "system",
+        content:
+          SYSTEM_PROMPT + "\n" + profileContext,
+      },
+    ];
+
+    // ==================================================
+    // HISTORY
+    // ==================================================
+
+    for (const msg of history) {
+      messages.push({
+        role: msg.role,
+        content: msg.content,
+      });
+    }
+
+    // ==================================================
+    // CURRENT USER MESSAGE
+    // ==================================================
+
+    if (imageUrl) {
+      messages.push({
+        role: "user",
+
+        content: [
+          {
+            type: "text",
+
+            text:
+              userMessage?.trim() ||
+              "Analyze this image carefully.",
+          },
+
+          {
+            type: "image_url",
+
+            image_url: {
+              url: imageUrl,
+            },
+          },
+        ],
+      });
+    } else {
+      messages.push({
+        role: "user",
+
+        content:
+          userMessage?.trim() || "Hello",
+      });
+    }
+
+    // ==================================================
+    // GROQ REQUEST
+    // ==================================================
 
     const response = await fetch(
       "https://api.groq.com/openai/v1/chat/completions",
       {
         method: "POST",
-
-        signal: controller.signal,
 
         headers: {
           Authorization: `Bearer ${GROQ_API_KEY}`,
@@ -175,153 +563,319 @@ async function getAIResponse(userText: string) {
         },
 
         body: JSON.stringify({
-          model: "llama3-8b-8192",
+          model: "llama-3.3-70b-versatile",
 
-          messages: [
-            {
-              role: "system",
-              content: SYSTEM_PROMPT,
-            },
-            {
-              role: "user",
-              content: userText,
-            },
-          ],
+          messages,
 
-          temperature: 0.7,
-          max_tokens: 500,
-        }),
-      }
-    );
+          temperature: 0.85,
 
-    clearTimeout(timeout);
+          top_p: 0.95,
 
-    const raw = await response.text();
+          max_tokens: 1200,
 
-    console.log("Groq Status:", response.status);
-    console.log("Groq Raw:", raw);
+          presence_penalty: 0.7,
 
-    if (!response.ok) {
-      return `⚠️ AI Error (${response.status})`;
-    }
-
-    let data;
-
-    try {
-      data = JSON.parse(raw);
-    } catch {
-      return "⚠️ AI returned invalid response.";
-    }
-
-    let reply =
-      data?.choices?.[0]?.message?.content;
-
-    if (!reply || typeof reply !== "string") {
-      return "⚠️ Empty AI response.";
-    }
-
-    reply = escapeMarkdown(reply);
-
-    if (reply.length > 4000) {
-      reply = reply.slice(0, 4000);
-    }
-
-    return reply;
-  } catch (error: any) {
-    console.error("AI ERROR:", error);
-
-    if (error.name === "AbortError") {
-      return "⚠️ AI request timed out.";
-    }
-
-    return "⚠️ Failed to process AI request.";
-  }
-}
-
-// =========================
-// SEND MESSAGE
-// =========================
-
-async function sendMessage(
-  chatId: number,
-  text: string
-) {
-  try {
-    const response = await fetch(
-      `${TELEGRAM_API}/sendMessage`,
-      {
-        method: "POST",
-
-        headers: {
-          "Content-Type": "application/json",
-        },
-
-        body: JSON.stringify({
-          chat_id: chatId,
-
-          text,
-
-          parse_mode: "Markdown",
-
-          disable_web_page_preview: true,
-
-          reply_markup: {
-            inline_keyboard: [
-              [
-                {
-                  text: "⚡ AI Bot",
-                  callback_data: "ai",
-                },
-              ],
-            ],
-          },
+          frequency_penalty: 0.4,
         }),
       }
     );
 
     const data = await response.json();
 
-    if (!data.ok) {
-      console.error("Telegram Error:", data);
+    console.log(
+      "GROQ RESPONSE:",
+      JSON.stringify(data, null, 2)
+    );
+
+    // ==================================================
+    // ERROR
+    // ==================================================
+
+    if (data.error) {
+      console.error(
+        "GROQ ERROR:",
+        data.error
+      );
+
+      return `AI Error: ${data.error.message}`;
     }
+
+    // ==================================================
+    // REPLY
+    // ==================================================
+
+    const reply =
+      data?.choices?.[0]?.message?.content;
+
+    if (
+      !reply ||
+      typeof reply !== "string"
+    ) {
+      return "AI returned an empty response.";
+    }
+
+    return reply.trim();
   } catch (error) {
-    console.error("SEND MESSAGE ERROR:", error);
+    console.error("AI ERROR:", error);
+
+    return "Temporary AI failure.";
   }
 }
 
-// =========================
-// TYPING STATUS
-// =========================
+// ======================================================
+// COMMANDS
+// ======================================================
 
-async function sendTyping(chatId: number) {
+async function handleCommand(
+  chatId: number,
+  text: string
+) {
+  const command = lower(text);
+
+  // ==================================================
+  // START
+  // ==================================================
+
+  if (command === "/start") {
+    await sendMessage(
+      chatId,
+      `
+🔥 Hi, I am Bruce!
+
+I am a powerful AI assistant here to chat, answer questions, and help you with a wide range of topics.
+      `
+    );
+
+    return true;
+  }
+
+  // ==================================================
+  // HELP
+  // ==================================================
+
+  if (command === "/help") {
+    await sendMessage(
+      chatId,
+      `
+Commands:
+
+/start - Start bot
+/help - Show help
+/reset - Clear memory
+
+Just chat naturally.
+      `
+    );
+
+    return true;
+  }
+
+  // ==================================================
+  // RESET
+  // ==================================================
+
+  if (command === "/reset") {
+    clearMemory(chatId);
+
+    await sendMessage(
+      chatId,
+      "Conversation memory cleared."
+    );
+
+    return true;
+  }
+
+  return false;
+}
+
+// ======================================================
+// MAIN
+// ======================================================
+
+export async function POST(req: NextRequest) {
   try {
-    await fetch(
-      `${TELEGRAM_API}/sendChatAction`,
+    const body = await req.json();
+
+    console.log(
+      "UPDATE:",
+      JSON.stringify(body, null, 2)
+    );
+
+    const message = body?.message;
+
+    if (!message) {
+      return NextResponse.json({
+        ok: true,
+      });
+    }
+
+    const chatId = message.chat.id;
+
+    // ==================================================
+    // SAVE PROFILE
+    // ==================================================
+
+    saveUserProfile(
+      chatId,
+      message.from?.first_name,
+      message.from?.username
+    );
+
+    // ==================================================
+    // RATE LIMIT
+    // ==================================================
+
+    if (isRateLimited(chatId)) {
+      await sendMessage(
+        chatId,
+        "You're sending messages too fast."
+      );
+
+      return NextResponse.json({
+        ok: true,
+      });
+    }
+
+    // ==================================================
+    // TEXT
+    // ==================================================
+
+    const rawText = message.text || "";
+
+    const text = normalize(rawText);
+
+    // ==================================================
+    // COMMANDS
+    // ==================================================
+
+    if (text && isCommand(text)) {
+      const handled = await handleCommand(
+        chatId,
+        text
+      );
+
+      if (handled) {
+        return NextResponse.json({
+          ok: true,
+        });
+      }
+    }
+
+    // ==================================================
+    // TIME
+    // ==================================================
+
+    if (
+      text &&
+      isPureTimeQuestion(text)
+    ) {
+      await sendMessage(
+        chatId,
+        `India Time: ${getIndiaTime()}`
+      );
+
+      return NextResponse.json({
+        ok: true,
+      });
+    }
+
+    // ==================================================
+    // IMAGE SUPPORT
+    // ==================================================
+
+    let imageUrl: string | undefined;
+
+    if (
+      message.photo &&
+      Array.isArray(message.photo)
+    ) {
+      const largestPhoto =
+        message.photo[
+          message.photo.length - 1
+        ];
+
+      const fileId = largestPhoto.file_id;
+
+      const fileUrl =
+        await getTelegramFileUrl(fileId);
+
+      if (fileUrl) {
+        imageUrl = fileUrl;
+      }
+    }
+
+    // ==================================================
+    // EMPTY CHECK
+    // ==================================================
+
+    if (!text && !imageUrl) {
+      return NextResponse.json({
+        ok: true,
+      });
+    }
+
+    // ==================================================
+    // TYPING
+    // ==================================================
+
+    await sendTyping(chatId);
+
+    // ==================================================
+    // SAVE USER MEMORY
+    // ==================================================
+
+    if (text) {
+      addMemory(chatId, "user", text);
+    }
+
+    if (imageUrl) {
+      addMemory(
+        chatId,
+        "user",
+        "[Image Uploaded]"
+      );
+    }
+
+    // ==================================================
+    // AI
+    // ==================================================
+
+    const aiReply = await askAI(
+      chatId,
+      text,
+      imageUrl
+    );
+
+    // ==================================================
+    // SAVE AI
+    // ==================================================
+
+    addMemory(
+      chatId,
+      "assistant",
+      aiReply
+    );
+
+    // ==================================================
+    // SEND
+    // ==================================================
+
+    await sendMessage(chatId, aiReply);
+
+    return NextResponse.json({
+      ok: true,
+    });
+  } catch (error) {
+    console.error("MAIN ERROR:", error);
+
+    return NextResponse.json(
       {
-        method: "POST",
-
-        headers: {
-          "Content-Type": "application/json",
-        },
-
-        body: JSON.stringify({
-          chat_id: chatId,
-          action: "typing",
-        }),
+        ok: false,
+        error: "Internal Server Error",
+      },
+      {
+        status: 500,
       }
     );
-  } catch (error) {
-    console.error("Typing Error:", error);
   }
-}
-
-// =========================
-// MARKDOWN ESCAPE
-// =========================
-
-function escapeMarkdown(text: string) {
-  return text.replace(
-    /[_*[\]()~`>#+\-=|{}.!]/g,
-    "\\$&"
-  );
 }
