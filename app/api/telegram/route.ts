@@ -7,29 +7,43 @@ export async function POST(req: Request) {
   try {
     const body = await req.json();
 
-    console.log("Webhook received");
+    console.log("WEBHOOK RECEIVED");
 
     const chatId = body.message?.chat?.id;
     const text = body.message?.text;
 
-    if (!chatId || !text) {
+    if (!chatId) {
+      console.log("No chat ID");
       return NextResponse.json({ ok: true });
     }
-
-    console.log("User:", text);
 
     // START COMMAND
     if (text === "/start") {
       await sendMessage(
         chatId,
-        "🤖 Hi, I am Vishnu's Assistance, How can I Assistance today."
+        "🤖 Advanced AI Bot is online.\n\nAsk me anything."
       );
 
       return NextResponse.json({ ok: true });
     }
 
-    // TIME COMMAND
-    if (text.toLowerCase().includes("time")) {
+    // NO TEXT MESSAGE
+    if (!text) {
+      await sendMessage(
+        chatId,
+        "⚠️ Only text messages are supported right now."
+      );
+
+      return NextResponse.json({ ok: true });
+    }
+
+    console.log("USER MESSAGE:", text);
+
+    // REAL TIME COMMAND
+    if (
+      text.toLowerCase().includes("time") ||
+      text.toLowerCase().includes("date")
+    ) {
       const currentTime = new Date().toLocaleString("en-IN", {
         timeZone: "Asia/Kolkata",
       });
@@ -42,64 +56,98 @@ export async function POST(req: Request) {
       return NextResponse.json({ ok: true });
     }
 
-    // GROQ AI REQUEST
+    // AI REQUEST
+    try {
+      const aiResponse = await fetch(
+        "https://api.groq.com/openai/v1/chat/completions",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${GROQ_API_KEY}`,
+          },
+          body: JSON.stringify({
+            model: "llama3-8b-8192",
+            temperature: 0.7,
+            max_tokens: 500,
+            messages: [
+              {
+                role: "system",
+                content:
+                  "You are Vishnu's powerful Telegram AI assistant. Reply naturally, intelligently, and briefly unless detailed explanation is needed.",
+              },
+              {
+                role: "user",
+                content: text,
+              },
+            ],
+          }),
+        }
+      );
+
+      const data = await aiResponse.json();
+
+      console.log("GROQ RESPONSE:");
+      console.log(JSON.stringify(data, null, 2));
+
+      let reply = "⚠️ AI could not generate response.";
+
+      if (
+        data &&
+        data.choices &&
+        data.choices[0] &&
+        data.choices[0].message &&
+        data.choices[0].message.content
+      ) {
+        reply = data.choices[0].message.content;
+      }
+
+      await sendMessage(chatId, reply);
+    } catch (aiError) {
+      console.log("AI ERROR:");
+      console.log(aiError);
+
+      await sendMessage(
+        chatId,
+        "⚠️ AI temporarily unavailable."
+      );
+    }
+
+    return NextResponse.json({ ok: true });
+  } catch (error) {
+    console.log("SERVER ERROR:");
+    console.log(error);
+
+    return NextResponse.json({
+      ok: false,
+      error: "Server crashed",
+    });
+  }
+}
+
+// SEND TELEGRAM MESSAGE
+async function sendMessage(chatId: number, text: string) {
+  try {
     const response = await fetch(
-      "https://api.groq.com/openai/v1/chat/completions",
+      `https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`,
       {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${GROQ_API_KEY}`,
         },
         body: JSON.stringify({
-          model: "llama3-8b-8192",
-          messages: [
-            {
-              role: "system",
-              content:
-                "You are Vishnu's advanced Telegram AI assistant.",
-            },
-            {
-              role: "user",
-              content: text,
-            },
-          ],
+          chat_id: chatId,
+          text: text,
         }),
       }
     );
 
     const data = await response.json();
 
-    console.log("Groq Response:", data);
-
-    const reply =
-      data?.choices?.[0]?.message?.content ||
-      "AI failed to respond.";
-
-    await sendMessage(chatId, reply);
-
-    return NextResponse.json({ ok: true });
+    console.log("TELEGRAM RESPONSE:");
+    console.log(data);
   } catch (error) {
-    console.error("FULL ERROR:", error);
-
-    return NextResponse.json({
-      ok: false,
-    });
+    console.log("SEND MESSAGE ERROR:");
+    console.log(error);
   }
-}
-
-async function sendMessage(chatId: number, text: string) {
-  await fetch(
-    `https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`,
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        chat_id: chatId,
-        text,
-      }),
-    }
-  );
 }
