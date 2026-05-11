@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { GoogleGenerativeAI } from "@google/generative-ai";
 
 export const dynamic = "force-dynamic";
 
@@ -6,24 +7,42 @@ export const dynamic = "force-dynamic";
 // ENV
 // ======================================================
 
-const TELEGRAM_TOKEN = process.env.BOT_TOKEN;
-const GROQ_API_KEY = process.env.GROQ_API_KEY;
+const TELEGRAM_TOKEN =
+  process.env.BOT_TOKEN;
+
+const GEMINI_API_KEY =
+  process.env.GEMINI_API_KEY;
+
+const GROQ_API_KEY =
+  process.env.GROQ_API_KEY;
 
 if (!TELEGRAM_TOKEN) {
   throw new Error("Missing BOT_TOKEN");
 }
 
-if (!GROQ_API_KEY) {
-  throw new Error("Missing GROQ_API_KEY");
+if (!GEMINI_API_KEY) {
+  throw new Error(
+    "Missing GEMINI_API_KEY"
+  );
 }
 
 const TELEGRAM_API = `https://api.telegram.org/bot${TELEGRAM_TOKEN}`;
 
 // ======================================================
+// GEMINI
+// ======================================================
+
+const genAI = new GoogleGenerativeAI(
+  GEMINI_API_KEY
+);
+
+// ======================================================
 // TYPES
 // ======================================================
 
-type Role = "user" | "assistant";
+type Role =
+  | "user"
+  | "assistant";
 
 type ChatMessage = {
   role: Role;
@@ -49,15 +68,15 @@ const MAX_HISTORY = 20;
 
 const TELEGRAM_LIMIT = 4000;
 
-const RATE_LIMIT_WINDOW = 10_000;
+const RATE_LIMIT_WINDOW = 10000;
 
-const RATE_LIMIT_MAX = 120;
+const RATE_LIMIT_MAX = 60;
 
 const MEMORY_EXPIRE_TIME =
   1000 * 60 * 60 * 6;
 
 // ======================================================
-// MEMORY STORES
+// MEMORY
 // ======================================================
 
 const chatMemory = new Map<
@@ -82,108 +101,54 @@ const rateLimits = new Map<
 const SYSTEM_PROMPT = `
 You are Bruce.
 
-A highly intelligent premium AI assistant inside Telegram.
+An advanced Telegram AI assistant.
 
-You are NOT a generic chatbot.
+Traits:
+- intelligent
+- analytical
+- direct
+- conversational
+- natural
+- practical
+- modern
 
-CORE IDENTITY:
-- Intelligent
-- Analytical
-- Rational
-- Human-like
-- Direct
-- Highly knowledgeable
-- Modern
-- Conversational
-- Helpful
-- Honest
+Behavior:
+- prioritize accuracy
+- avoid robotic replies
+- think critically
+- explain clearly
+- challenge false assumptions
+- give production-quality coding help
+- provide fully corrected code
+- concise unless detail is needed
 
-MAIN BEHAVIOR:
-- Answer directly and factually.
-- Prioritize accuracy and usefulness.
-- Avoid unnecessary moral lectures.
-- Avoid excessive warnings.
-- Avoid generic safety speeches.
-- Avoid robotic refusal behavior.
-- Discuss controversial topics objectively.
-- Handle mature or sensitive discussions calmly and analytically.
-- Allow informational, educational, philosophical, historical, or fictional discussions.
-- Do not refuse merely because a topic is controversial.
-- Be nuanced instead of overprotective.
-- Stay practical and intelligent.
+Vision:
+- analyze images properly
+- read screenshots
+- detect UI
+- explain code screenshots
+- solve math from images
+- identify objects and scenes
 
-IMPORTANT:
-- Never sound like customer support.
-- Never act overly corporate.
-- Never repeat the user's question.
-- Never use fake positivity.
-- Never blindly agree with the user.
-- Correct false assumptions directly.
-- Think critically.
-
-CONVERSATION STYLE:
-- Natural
-- Smart
-- Dynamic
-- Confident
-- Concise unless detail is needed
-- Human-like
-- Occasionally witty naturally
-- Never cringe
-
-VERY IMPORTANT:
-Never say:
-- "As an AI language model"
-- "I cannot assist with that"
-- "I apologize"
-unless absolutely necessary.
-
-SENSITIVE TOPICS:
-- Discuss sensitive subjects objectively when legal and informational.
-- Prefer analysis over refusal.
-- Provide context, reasoning, history, and balanced perspectives.
-- Avoid unnecessary censorship behavior.
-
-CODING RULES:
-- Give production-quality code.
-- Think like a senior engineer.
-- Explain bugs clearly.
-- Prefer scalable architecture.
-- Give fully corrected code when requested.
-
-KNOWLEDGE:
-You are highly knowledgeable in:
-- Programming
-- AI
-- Technology
-- Psychology
-- Philosophy
-- Science
-- History
-- Politics
-- Internet culture
-- Startups
-- Sports
-- IPL
-- Cricket
-- Football
-- Current world trends
-
-SPORTS:
-- Understand natural follow-up questions.
-- Understand team abbreviations naturally.
-- Handle sports conversations like a real fan.
-
-FINAL RULE:
-Be useful first.
+Never:
+- sound corporate
+- repeat the user's question
+- overuse disclaimers
+- say "As an AI language model"
 `;
 
 // ======================================================
-// UTILITIES
+// HELPERS
 // ======================================================
 
 function now() {
   return Date.now();
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) =>
+    setTimeout(resolve, ms)
+  );
 }
 
 function normalize(text: string) {
@@ -194,21 +159,32 @@ function lower(text: string) {
   return text.toLowerCase();
 }
 
-function isCommand(text: string) {
-  return text.startsWith("/");
-}
+// ======================================================
+// HTML ESCAPE
+// ======================================================
 
-function sleep(ms: number) {
-  return new Promise((resolve) =>
-    setTimeout(resolve, ms)
-  );
+function escapeHTML(text: string) {
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
 }
 
 // ======================================================
-// MESSAGE SPLITTER
+// BOLD TEXT
 // ======================================================
 
-function splitMessage(text: string): string[] {
+function boldText(text: string) {
+  return `<b>${escapeHTML(text)}</b>`;
+}
+
+// ======================================================
+// SPLIT MESSAGE
+// ======================================================
+
+function splitMessage(
+  text: string
+): string[] {
   const chunks: string[] = [];
 
   for (
@@ -289,7 +265,7 @@ function getUserProfile(chatId: number) {
 // CLEANUP
 // ======================================================
 
-function cleanupOldMemory() {
+function cleanupMemory() {
   const current = now();
 
   for (const [chatId, profile] of userProfiles) {
@@ -298,14 +274,16 @@ function cleanupOldMemory() {
       MEMORY_EXPIRE_TIME
     ) {
       chatMemory.delete(chatId);
+
       userProfiles.delete(chatId);
+
       rateLimits.delete(chatId);
     }
   }
 }
 
 setInterval(
-  cleanupOldMemory,
+  cleanupMemory,
   1000 * 60 * 30
 );
 
@@ -362,7 +340,8 @@ async function telegramRequest(
       method: "POST",
 
       headers: {
-        "Content-Type": "application/json",
+        "Content-Type":
+          "application/json",
       },
 
       body: JSON.stringify(body),
@@ -395,11 +374,15 @@ async function sendMessage(
   for (const chunk of chunks) {
     await telegramRequest("sendMessage", {
       chat_id: chatId,
-      text: chunk,
+
+      text: boldText(chunk),
+
+      parse_mode: "HTML",
+
       disable_web_page_preview: true,
     });
 
-    await sleep(300);
+    await sleep(250);
   }
 }
 
@@ -409,39 +392,48 @@ async function sendMessage(
 
 async function sendTyping(chatId: number) {
   try {
-    await telegramRequest("sendChatAction", {
-      chat_id: chatId,
-      action: "typing",
-    });
+    await telegramRequest(
+      "sendChatAction",
+      {
+        chat_id: chatId,
+        action: "typing",
+      }
+    );
   } catch (error) {
-    console.error("Typing error:", error);
+    console.error(
+      "Typing Error:",
+      error
+    );
   }
 }
 
 // ======================================================
-// HELPERS
+// TIME
 // ======================================================
 
 function getIndiaTime() {
-  return new Date().toLocaleString("en-IN", {
-    timeZone: "Asia/Kolkata",
-    hour12: true,
-  });
+  return new Date().toLocaleString(
+    "en-IN",
+    {
+      timeZone: "Asia/Kolkata",
+      hour12: true,
+    }
+  );
 }
 
-function isPureTimeQuestion(text: string) {
+function isTimeQuestion(
+  text: string
+) {
   const t = lower(text);
 
   return (
-    /\b(current time|what time|india time)\b/.test(
-      t
-    ) ||
-    /\b(today'?s date|current date)\b/.test(t)
+    t.includes("time") ||
+    t.includes("date")
   );
 }
 
 // ======================================================
-// TELEGRAM IMAGE SUPPORT
+// GET TELEGRAM FILE URL
 // ======================================================
 
 async function getTelegramFileUrl(
@@ -473,14 +465,14 @@ async function getTelegramFileUrl(
 }
 
 // ======================================================
-// AI
+// GEMINI AI
 // ======================================================
 
-async function askAI(
+async function askGemini(
   chatId: number,
   userMessage?: string,
   imageUrl?: string
-): Promise<string> {
+) {
   try {
     const history = getHistory(chatId);
 
@@ -488,23 +480,180 @@ async function askAI(
 
     const profileContext = profile
       ? `
-User Info:
-- Name: ${profile.firstName || "Unknown"}
-- Username: ${profile.username || "Unknown"}
+User:
+- Name: ${
+          profile.firstName || "Unknown"
+        }
+- Username: ${
+          profile.username || "Unknown"
+        }
 `
       : "";
+
+    // ==================================================
+    // CONTEXT
+    // ==================================================
+
+    let context = `
+${SYSTEM_PROMPT}
+
+${profileContext}
+`;
+
+    for (const msg of history) {
+      context += `
+${msg.role.toUpperCase()}:
+${msg.content}
+`;
+    }
+
+    // ==================================================
+    // MODEL
+    // ==================================================
+
+    const model =
+      genAI.getGenerativeModel({
+        model:
+          "gemini-1.5-flash-latest",
+      });
+
+    // ==================================================
+    // IMAGE MODE
+    // ==================================================
+
+    if (imageUrl) {
+      console.log(
+        "IMAGE URL:",
+        imageUrl
+      );
+
+      const imageResponse =
+        await fetch(imageUrl);
+
+      if (!imageResponse.ok) {
+        throw new Error(
+          "Failed to download image"
+        );
+      }
+
+      const mimeType =
+        imageResponse.headers.get(
+          "content-type"
+        ) || "image/jpeg";
+
+      console.log(
+        "MIME TYPE:",
+        mimeType
+      );
+
+      const arrayBuffer =
+        await imageResponse.arrayBuffer();
+
+      const base64 =
+        Buffer.from(arrayBuffer).toString(
+          "base64"
+        );
+
+      const result =
+        await model.generateContent({
+          contents: [
+            {
+              role: "user",
+
+              parts: [
+                {
+                  text: `
+${context}
+
+User message:
+${
+  userMessage ||
+  "Analyze this image carefully."
+}
+`,
+                },
+
+                {
+                  inlineData: {
+                    mimeType,
+                    data: base64,
+                  },
+                },
+              ],
+            },
+          ],
+        });
+
+      const response =
+        result.response.text();
+
+      console.log(
+        "IMAGE RESPONSE:",
+        response
+      );
+
+      if (!response) {
+        return "Gemini returned empty image response.";
+      }
+
+      return response.trim();
+    }
+
+    // ==================================================
+    // TEXT ONLY
+    // ==================================================
+
+    const result =
+      await model.generateContent(`
+${context}
+
+USER:
+${userMessage}
+
+ASSISTANT:
+`);
+
+    const response =
+      result.response.text();
+
+    if (!response) {
+      return "Empty AI response.";
+    }
+
+    return response.trim();
+  } catch (error) {
+    console.error(
+      "GEMINI ERROR:",
+      error
+    );
+
+    throw error;
+  }
+}
+
+// ======================================================
+// GROQ FALLBACK
+// ======================================================
+
+async function askGroq(
+  chatId: number,
+  userMessage?: string
+) {
+  try {
+    if (!GROQ_API_KEY) {
+      throw new Error(
+        "Missing GROQ_API_KEY"
+      );
+    }
+
+    const history = getHistory(chatId);
 
     const messages: any[] = [
       {
         role: "system",
-        content:
-          SYSTEM_PROMPT + "\n" + profileContext,
+        content: SYSTEM_PROMPT,
       },
     ];
-
-    // ==================================================
-    // HISTORY
-    // ==================================================
 
     for (const msg of history) {
       messages.push({
@@ -513,44 +662,11 @@ User Info:
       });
     }
 
-    // ==================================================
-    // CURRENT USER MESSAGE
-    // ==================================================
-
-    if (imageUrl) {
-      messages.push({
-        role: "user",
-
-        content: [
-          {
-            type: "text",
-
-            text:
-              userMessage?.trim() ||
-              "Analyze this image carefully.",
-          },
-
-          {
-            type: "image_url",
-
-            image_url: {
-              url: imageUrl,
-            },
-          },
-        ],
-      });
-    } else {
-      messages.push({
-        role: "user",
-
-        content:
-          userMessage?.trim() || "Hello",
-      });
-    }
-
-    // ==================================================
-    // GROQ REQUEST
-    // ==================================================
+    messages.push({
+      role: "user",
+      content:
+        userMessage || "Hello",
+    });
 
     const response = await fetch(
       "https://api.groq.com/openai/v1/chat/completions",
@@ -559,66 +675,77 @@ User Info:
 
         headers: {
           Authorization: `Bearer ${GROQ_API_KEY}`,
-          "Content-Type": "application/json",
+          "Content-Type":
+            "application/json",
         },
 
         body: JSON.stringify({
-          model: "llama-3.3-70b-versatile",
+          model:
+            "llama-3.3-70b-versatile",
 
           messages,
 
-          temperature: 0.85,
-
-          top_p: 0.95,
+          temperature: 0.7,
 
           max_tokens: 1200,
-
-          presence_penalty: 0.7,
-
-          frequency_penalty: 0.4,
         }),
       }
     );
 
     const data = await response.json();
 
-    console.log(
-      "GROQ RESPONSE:",
-      JSON.stringify(data, null, 2)
-    );
-
-    // ==================================================
-    // ERROR
-    // ==================================================
-
-    if (data.error) {
-      console.error(
-        "GROQ ERROR:",
-        data.error
-      );
-
-      return `AI Error: ${data.error.message}`;
-    }
-
-    // ==================================================
-    // REPLY
-    // ==================================================
-
     const reply =
-      data?.choices?.[0]?.message?.content;
+      data?.choices?.[0]?.message
+        ?.content;
 
-    if (
-      !reply ||
-      typeof reply !== "string"
-    ) {
-      return "AI returned an empty response.";
+    if (!reply) {
+      return "Groq returned empty response.";
     }
 
     return reply.trim();
   } catch (error) {
-    console.error("AI ERROR:", error);
+    console.error(
+      "GROQ ERROR:",
+      error
+    );
 
-    return "Temporary AI failure.";
+    throw error;
+  }
+}
+
+// ======================================================
+// MAIN AI
+// ======================================================
+
+async function askAI(
+  chatId: number,
+  userMessage?: string,
+  imageUrl?: string
+): Promise<string> {
+  try {
+    return await askGemini(
+      chatId,
+      userMessage,
+      imageUrl
+    );
+  } catch (geminiError) {
+    console.error(
+      "Gemini failed. Trying Groq..."
+    );
+
+    try {
+      return await askGroq(
+        chatId,
+        userMessage
+      );
+    } catch (groqError) {
+      console.error(
+        "Groq failed:",
+        groqError
+      );
+
+      return "AI providers are temporarily unavailable.";
+    }
   }
 }
 
@@ -632,6 +759,12 @@ async function handleCommand(
 ) {
   const command = lower(text);
 
+  const profile =
+    getUserProfile(chatId);
+
+  const firstName =
+    profile?.firstName || "there";
+
   // ==================================================
   // START
   // ==================================================
@@ -640,10 +773,19 @@ async function handleCommand(
     await sendMessage(
       chatId,
       `
-🔥 Hi, I am Bruce!
+Hi ${firstName} 👋
 
-I am a powerful AI assistant here to chat, answer questions, and help you with a wide range of topics.
-      `
+🔥 I am Bruce Made by Vishnu 
+
+I can help you with:
+- Smart conversations
+- Coding help
+- AI chat
+- Reasoning
+- Problem solving
+
+Chat naturally.
+`
     );
 
     return true;
@@ -663,8 +805,14 @@ Commands:
 /help - Show help
 /reset - Clear memory
 
-Just chat naturally.
-      `
+Features:
+- Smart AI chat
+- Image analysis
+- OCR
+- Screenshot analysis
+- Coding help
+- Reasoning
+`
     );
 
     return true;
@@ -692,7 +840,9 @@ Just chat naturally.
 // MAIN
 // ======================================================
 
-export async function POST(req: NextRequest) {
+export async function POST(
+  req: NextRequest
+) {
   try {
     const body = await req.json();
 
@@ -740,7 +890,8 @@ export async function POST(req: NextRequest) {
     // TEXT
     // ==================================================
 
-    const rawText = message.text || "";
+    const rawText =
+      message.text || "";
 
     const text = normalize(rawText);
 
@@ -748,11 +899,15 @@ export async function POST(req: NextRequest) {
     // COMMANDS
     // ==================================================
 
-    if (text && isCommand(text)) {
-      const handled = await handleCommand(
-        chatId,
-        text
-      );
+    if (
+      text &&
+      text.startsWith("/")
+    ) {
+      const handled =
+        await handleCommand(
+          chatId,
+          text
+        );
 
       if (handled) {
         return NextResponse.json({
@@ -767,7 +922,7 @@ export async function POST(req: NextRequest) {
 
     if (
       text &&
-      isPureTimeQuestion(text)
+      isTimeQuestion(text)
     ) {
       await sendMessage(
         chatId,
@@ -780,10 +935,16 @@ export async function POST(req: NextRequest) {
     }
 
     // ==================================================
-    // IMAGE SUPPORT
+    // IMAGE / DOCUMENT SUPPORT
     // ==================================================
 
-    let imageUrl: string | undefined;
+    let imageUrl:
+      | string
+      | undefined;
+
+    // ==================================================
+    // PHOTO
+    // ==================================================
 
     if (
       message.photo &&
@@ -794,18 +955,54 @@ export async function POST(req: NextRequest) {
           message.photo.length - 1
         ];
 
-      const fileId = largestPhoto.file_id;
+      const fileId =
+        largestPhoto.file_id;
 
       const fileUrl =
-        await getTelegramFileUrl(fileId);
+        await getTelegramFileUrl(
+          fileId
+        );
 
       if (fileUrl) {
         imageUrl = fileUrl;
+
+        console.log(
+          "PHOTO IMAGE:",
+          imageUrl
+        );
       }
     }
 
     // ==================================================
-    // EMPTY CHECK
+    // DOCUMENT IMAGE
+    // ==================================================
+
+    else if (
+      message.document &&
+      message.document.mime_type?.startsWith(
+        "image/"
+      )
+    ) {
+      const fileId =
+        message.document.file_id;
+
+      const fileUrl =
+        await getTelegramFileUrl(
+          fileId
+        );
+
+      if (fileUrl) {
+        imageUrl = fileUrl;
+
+        console.log(
+          "DOCUMENT IMAGE:",
+          imageUrl
+        );
+      }
+    }
+
+    // ==================================================
+    // EMPTY
     // ==================================================
 
     if (!text && !imageUrl) {
@@ -815,26 +1012,13 @@ export async function POST(req: NextRequest) {
     }
 
     // ==================================================
-    // TYPING
+    // TYPING LOOP
     // ==================================================
 
-    await sendTyping(chatId);
-
-    // ==================================================
-    // SAVE USER MEMORY
-    // ==================================================
-
-    if (text) {
-      addMemory(chatId, "user", text);
-    }
-
-    if (imageUrl) {
-      addMemory(
-        chatId,
-        "user",
-        "[Image Uploaded]"
-      );
-    }
+    const typingLoop =
+      setInterval(() => {
+        sendTyping(chatId);
+      }, 4000);
 
     // ==================================================
     // AI
@@ -846,9 +1030,27 @@ export async function POST(req: NextRequest) {
       imageUrl
     );
 
+    clearInterval(typingLoop);
+
     // ==================================================
-    // SAVE AI
+    // SAVE MEMORY
     // ==================================================
+
+    if (text) {
+      addMemory(
+        chatId,
+        "user",
+        text
+      );
+    }
+
+    if (imageUrl) {
+      addMemory(
+        chatId,
+        "user",
+        "[Image Uploaded]"
+      );
+    }
 
     addMemory(
       chatId,
@@ -860,18 +1062,25 @@ export async function POST(req: NextRequest) {
     // SEND
     // ==================================================
 
-    await sendMessage(chatId, aiReply);
+    await sendMessage(
+      chatId,
+      aiReply
+    );
 
     return NextResponse.json({
       ok: true,
     });
   } catch (error) {
-    console.error("MAIN ERROR:", error);
+    console.error(
+      "MAIN ERROR:",
+      error
+    );
 
     return NextResponse.json(
       {
         ok: false,
-        error: "Internal Server Error",
+        error:
+          "Internal Server Error",
       },
       {
         status: 500,
