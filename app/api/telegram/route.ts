@@ -783,7 +783,7 @@ I can help you with:
 - AI chat
 - Reasoning
 - Problem solving
-❤️ Stay with us https://t.me/+B9KqNbvFv1cyOWE9
+
 Chat naturally.
 `
     );
